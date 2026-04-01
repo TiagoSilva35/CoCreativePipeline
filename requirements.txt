@@ -1,0 +1,10 @@
+numpy
+pandas
+matplotlib
+transformers
+sentence-transformers
+accelerate
+torch
+ipykernel
+optuna
+scikit-learn

@@ -1,0 +1,15 @@
+# all LaTeX auxiliary files
+*.aux
+*.log
+*.out
+*.toc
+*.lot
+*.lof
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+# python environment
+env/

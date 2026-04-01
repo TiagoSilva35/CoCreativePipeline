@@ -49,7 +49,7 @@ Tiago Silva\thanks{\texttt{tds@student.dei.uc.pt}}
 \and
 Miguel Pinto\thanks{\texttt{}}
 \and
-Gonçalo Borges\thanks{\texttt{}}
+Gonçalo Borges\thanks{\texttt{goncaloborges@student.dei.uc.pt}}
 \and
 André Cardoso\thanks{\texttt{}}
 \and
@@ -68,6 +68,22 @@ Miguel Martins\thanks{\texttt{}}
 
 \section{Introduction}
 \label{sec:introduction}
+
+In modern entertainment platforms, the dominant creative act is often not the generation of a single artifact, but rather the curation, sequencing, and contextualization of what users experience next. This project explores this paradigm by framing curation as a form of co-creation. When a system recommends content, it applies selection pressure that ultimately shapes user tastes, creator incentives, and the visibility of different cultural niches. 
+
+Historically, recommender systems focused heavily on optimizing for prediction accuracy, such as minimizing the Root Mean Square Error (RMSE) of user ratings. However, optimizing solely for accuracy often leads to degenerate system behaviors, such as filter bubbles, popularity bias, and a lack of discovery. A truly co-creative pipeline must balance immediate relevance with list-level properties like diversity and pacing, while continuously adapting to user feedback.
+
+To demonstrate this, we implemented an end-to-end interactive curation pipeline using the MovieLens 100K dataset. Our system blueprint is divided into four distinct stages:
+
+\begin{enumerate}
+    \item \textbf{Candidate Generation:} Filtering the dataset to produce a viable pool of unseen movies for a given user.
+    \item \textbf{Ranking:} Scoring candidates to encode personal value and relevance. We compare four rankers: a Popularity baseline, Matrix Factorization trained via Stochastic Gradient Descent (MF-SGD), Matrix Factorization trained via Alternating Least Squares (MF-ALS), and a Pairwise Learning-to-Rank (LTR) model.
+    \item \textbf{Reranking:} Applying Maximal Marginal Relevance (MMR) to the top-scored items to enforce diversity constraints, ensuring the final recommended slate explores different genres rather than collapsing into a narrow niche.
+    \item \textbf{Personalization Update:} Simulating interactive user sessions where the user's latent taste profile is dynamically updated after each choice using an Exponential Moving Average (EMA).
+\end{enumerate}
+
+Through this pipeline, this report investigates the comparative offline performance of these rankers (Recall@10 and NDCG@10), analyzes the critical tradeoff between relevance and diversity, and observes how a user's state evolves during simulated co-creative sessions.
+
 
 \section{Dataset and Preprocessing}
 \label{sec:dataset}

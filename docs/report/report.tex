@@ -88,14 +88,50 @@ Through this pipeline, this report investigates the comparative offline performa
 \section{Dataset and Preprocessing}
 \label{sec:dataset}
 
+For this project, we utilized the \textbf{MovieLens 100K} dataset, a standard benchmark in recommender systems research that contains 100,000 ratings (ranging from 1 to 5) applied to 1,682 movies by 943 users.
+
+To prepare the data for our models, we performed the following preprocessing steps:
+\begin{enumerate}
+    \item \textbf{ID Normalization:} The original \texttt{user\_id} and \texttt{item\_id} values were mapped to contiguous integer indices starting from 0 (e.g., $u \in \{0, \dots, 942\}$ and $i \in \{0, \dots, 1681\}$). This allows us to use the indices directly for fast array lookups and matrix operations during training.
+    \item \textbf{Interaction Histories:} We built per-user and per-item interaction dictionaries. We also calculated the global mean rating ($\mu$) across the training set, as well as the absolute popularity of each item (interaction count), which serves as a baseline feature for our rankers.
+    \item \textbf{Data Splitting:} We applied a randomized \textbf{80/20 train/test split} over the observed ratings. Furthermore, to facilitate rigorous hyperparameter tuning without leaking test data, we applied a secondary 80/20 split on the training data to generate a dedicated \textbf{validation set}.
+    \item \textbf{Relevance Definition:} For the purposes of evaluating our Top-K recommendation lists, we defined the set of "relevant" test items for a user $u$ mathematically as:
+    $$G_u = \{i : (u,i) \in \Omega_{test} \text{ and } r_{ui} \ge 4\}$$
+    where $\Omega_{test}$ represents the test set and $r_{ui}$ is the true rating given by the user.
+\end{enumerate}
+
+During evaluation, to ensure we are strictly evaluating the system's ability to recommend \textit{unseen} content, all items that a user had already rated in the training set were excluded from their candidate generation pool.
 
 \section{Implementation Details}
 \label{sec:implementation}
 
+The co-creative system blueprint is structured into four distinct stages: candidate generation, ranking, applying list constraints (reranking), and a personalization update via user feedback.
+
+\subsection{Candidate Generation}
+For any given user $u$, the candidate set $C(u)$ consists of all items that the user has not interacted with in the training split. This ensures that the system only recommends unseen movies to the user.
+
 \subsection{Rankers}
-We implemented four ranking methods:
+We implemented four distinct ranking methods to encode personal relevance:
+\begin{itemize}
+    \item \textbf{Popularity Baseline:} A non-personalized ranker that orders candidate movies based on their global interaction count in the training dataset.
+    \item \textbf{MF-SGD:} A Matrix Factorization model with biases predicting ratings as $\hat{r}_{ui} = \mu + b_u + b_i + p_u^\top q_i$, trained using Stochastic Gradient Descent.
+    \item \textbf{MF-ALS:} A Matrix Factorization model with biases trained using Alternating Least Squares, which relies on closed-form ridge regression updates.
+    \item \textbf{Pairwise LTR:} A logistic pairwise preference model leveraging gradient descent. The ranking score is computed as $s_\phi(u,i) = \phi^\top f(u,i)$. The feature vector $f(u,i)$ includes the base MF score, user bias, item bias, the log-normalized popularity of the item, and a constant bias term.
+\end{itemize}
 
+\subsection{Hyperparameter Tuning}
+While standard baseline parameters (e.g., $d=20$, $\lambda=0.05$) were initially considered, we utilized the \texttt{Optuna} framework to rigorously optimize our Matrix Factorization models against our dedicated validation set. 
 
+Rather than relying on manual guesses, we ran automated study trials to minimize the validation Root Mean Square Error (RMSE). For example, the optimization for the MF-SGD model yielded an ideal latent dimension of $d=81$, factor regularization $\lambda_{factors} \approx 0.1138$, bias regularization $\lambda_{biases} \approx 0.0005$, a learning rate $\eta \approx 0.0116$, and $75$ training epochs. These mathematically tuned parameters were subsequently locked in and used for all final offline evaluations and co-creative simulations.
+
+\subsection{Reranking (Diversity Constraints)}
+To control list-level diversity, we applied Maximal Marginal Relevance (MMR) over the top 80 candidates produced by the base ranker. The reranker dynamically builds the slate step-by-step by selecting the item $c^*$ that maximizes:
+$$c^* = \arg\max_{c \in C \setminus S} \left( (1 - \alpha)\text{sim}(c, q) - \alpha \max_{s \in S}\text{sim}(c, s) \right)$$
+Our pipeline computes item similarity via the cosine similarity of the $L_2$-normalized genre vectors extracted from the dataset's item metadata. We explored the trade-off parameter $\alpha \in \{0.1, 0.4, 0.7\}$ to observe the impact on relevance and diversity metrics.
+\subsection{Personalization Update (Session)}
+To simulate a co-creative loop, the system executes multi-turn sessions where a user is presented with a slate, makes a choice, and has their latent state updated. We simulate the choice by selecting an item from the slate that the user actually rated in the test set. The personalization update applies an Exponential Moving Average (EMA) to the user's latent representation. If user $u$ selects item $i^*$, their factor vector $p_u$ is updated dynamically using the learned item factor $q_{i^*}$ with a rate $\beta = 0.1$:
+$$p_u \leftarrow (1 - \beta)p_u + \beta q_{i^*}$$
+In our demonstration, we simulated 5 consecutive feedback rounds per user for 3 distinct users to observe how the recommended slate evolves and adapts to recent choices.
 
 \section{Experiments and Results}
 \label{sec:experiments}
@@ -433,3 +469,4 @@ Thus, offline evaluation can produce misleading estimates of recommendation qual
 \end{appendices}
 
 \end{document}
+

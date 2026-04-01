@@ -12,4 +12,6 @@
 *.synctex.gz
 
 # python environment
-env/
+env
+
+.claude

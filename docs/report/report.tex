@@ -16,6 +16,8 @@
 \usepackage{enumitem}
 \usepackage{appendix}
 
+\graphicspath{{images/}}
+
 % Define colors for code listings
 \definecolor{codegreen}{rgb}{0,0.6,0}
 \definecolor{codegray}{rgb}{0.5,0.5,0.5}
@@ -63,88 +65,254 @@ Miguel Martins\thanks{\texttt{}}
 \maketitle
 
 \begin{abstract}
-
+\noindent This report presents a co-creative curation pipeline built on the MovieLens 100K dataset. We implement and compare four ranking methods (a Popularity baseline, Matrix Factorization with Stochastic Gradient Descent (MF-SGD), Matrix Factorization with Alternating Least Squares (MF-ALS), and a Pairwise Learning-to-Rank (LTR) model) evaluated through Recall@10 and NDCG@10. Hyperparameters for the MF models were tuned using the Optuna framework. We also apply Maximal Marginal Relevance (MMR) reranking with cosine similarity based on genre to control list-level diversity, demonstrating a measurable relevance/diversity tradeoff across $\alpha \in \{0.1, 0.4, 0.7\}$. An ablation study isolates the contributions of MMR reranking and the popularity feature in LTR. Finally, we simulate three interactive personalization sessions using Exponential Moving Average (EMA) updates to observe how recommended lists evolve over consecutive feedback rounds.
 \end{abstract}
 
 \section{Introduction}
 \label{sec:introduction}
 
-In modern entertainment platforms, the dominant creative act is often not the generation of a single artifact, but rather the curation, sequencing, and contextualization of what users experience next. This project explores this paradigm by framing curation as a form of co-creation. When a system recommends content, it applies selection pressure that ultimately shapes user tastes, creator incentives, and the visibility of different cultural niches. 
+\noindent In modern entertainment platforms, the dominant creative act is often not the generation of a single artifact, but rather the curation, sequencing, and contextualization of what users experience next. This project explores this paradigm by framing curation as a form of co-creation. When a system recommends content, it applies selection pressure that ultimately shapes user tastes, creator incentives, and the visibility of different cultural niches.
 
-Historically, recommender systems focused heavily on optimizing for prediction accuracy, such as minimizing the Root Mean Square Error (RMSE) of user ratings. However, optimizing solely for accuracy often leads to degenerate system behaviors, such as filter bubbles, popularity bias, and a lack of discovery. A truly co-creative pipeline must balance immediate relevance with list-level properties like diversity and pacing, while continuously adapting to user feedback.
+\noindent Historically, recommender systems focused heavily on optimizing for prediction accuracy, such as minimizing the Root Mean Square Error (RMSE) of user ratings. However, optimizing solely for accuracy often leads to degenerate system behaviors, such as filter bubbles, popularity bias, and a lack of discovery. A truly co-creative pipeline must balance immediate relevance with list-level properties like diversity and pacing, while continuously adapting to user feedback.
 
-To demonstrate this, we implemented an end-to-end interactive curation pipeline using the MovieLens 100K dataset. Our system blueprint is divided into four distinct stages:
+\noindent To demonstrate this, we implemented an end-to-end interactive curation pipeline using the MovieLens 100K dataset. Our system blueprint is divided into four distinct stages:
 
 \begin{enumerate}
     \item \textbf{Candidate Generation:} Filtering the dataset to produce a viable pool of unseen movies for a given user.
     \item \textbf{Ranking:} Scoring candidates to encode personal value and relevance. We compare four rankers: a Popularity baseline, Matrix Factorization trained via Stochastic Gradient Descent (MF-SGD), Matrix Factorization trained via Alternating Least Squares (MF-ALS), and a Pairwise Learning-to-Rank (LTR) model.
-    \item \textbf{Reranking:} Applying Maximal Marginal Relevance (MMR) to the top-scored items to enforce diversity constraints, ensuring the final recommended slate explores different genres rather than collapsing into a narrow niche.
+    \item \textbf{Reranking:} Applying Maximal Marginal Relevance (MMR) to the top-scored items to enforce diversity constraints, which makes the final recommended list explore different genres rather than collapsing into a narrow niche.
     \item \textbf{Personalization Update:} Simulating interactive user sessions where the user's latent taste profile is dynamically updated after each choice using an Exponential Moving Average (EMA).
 \end{enumerate}
 
-Through this pipeline, this report investigates the comparative offline performance of these rankers (Recall@10 and NDCG@10), analyzes the critical tradeoff between relevance and diversity, and observes how a user's state evolves during simulated co-creative sessions.
+\noindent Through this pipeline, this report investigates the comparative offline performance of these rankers (Recall@10 and NDCG@10), analyzes the critical tradeoff between relevance and diversity, and observes how a user's state evolves during simulated co-creative sessions.
 
 
 \section{Dataset and Preprocessing}
 \label{sec:dataset}
 
-For this project, we utilized the \textbf{MovieLens 100K} dataset, a standard benchmark in recommender systems research that contains 100,000 ratings (ranging from 1 to 5) applied to 1,682 movies by 943 users.
+\noindent For this project, we utilized the \textbf{MovieLens 100K} dataset, a standard benchmark in recommender systems research that contains 100,000 ratings (ranging from 1 to 5) applied to 1,682 movies by 943 users.
 
-To prepare the data for our models, we performed the following preprocessing steps:
+\noindent To prepare the data for our models, we performed the following preprocessing steps:
 \begin{enumerate}
     \item \textbf{ID Normalization:} The original \texttt{user\_id} and \texttt{item\_id} values were mapped to contiguous integer indices starting from 0 (e.g., $u \in \{0, \dots, 942\}$ and $i \in \{0, \dots, 1681\}$). This allows us to use the indices directly for fast array lookups and matrix operations during training.
     \item \textbf{Interaction Histories:} We built per-user and per-item interaction dictionaries. We also calculated the global mean rating ($\mu$) across the training set, as well as the absolute popularity of each item (interaction count), which serves as a baseline feature for our rankers.
-    \item \textbf{Data Splitting:} We applied a randomized \textbf{80/20 train/test split} over the observed ratings. Furthermore, to facilitate rigorous hyperparameter tuning without leaking test data, we applied a secondary 80/20 split on the training data to generate a dedicated \textbf{validation set}.
-    \item \textbf{Relevance Definition:} For the purposes of evaluating our Top-K recommendation lists, we defined the set of "relevant" test items for a user $u$ mathematically as:
-    $$G_u = \{i : (u,i) \in \Omega_{test} \text{ and } r_{ui} \ge 4\}$$
-    where $\Omega_{test}$ represents the test set and $r_{ui}$ is the true rating given by the user.
+    \item \textbf{Data Splitting:} We applied a randomized \textbf{80/20 train/test split} over the observed ratings. Additionally, to ease hyperparameter tuning without leaking test data, we applied a secondary 80/20 split on the training data to generate a dedicated \textbf{validation set}.
+    \item \textbf{Relevance Definition:} For the purposes of evaluating our Top-K recommendation lists, we defined the set of ``relevant'' test items for a user $u$ as:
+    $$G_u = \{i : (u,i) \in \Omega_{\text{test}} \text{ and } r_{ui} \ge 4\}$$
+    where $\Omega_{\text{test}}$ represents the test set and $r_{ui}$ is the true rating given by the user.
 \end{enumerate}
-
-During evaluation, to ensure we are strictly evaluating the system's ability to recommend \textit{unseen} content, all items that a user had already rated in the training set were excluded from their candidate generation pool.
 
 \section{Implementation Details}
 \label{sec:implementation}
 
-The co-creative system blueprint is structured into four distinct stages: candidate generation, ranking, applying list constraints (reranking), and a personalization update via user feedback.
+\noindent The co-creative system is structured into four distinct stages: candidate generation, ranking, applying list constraints (reranking), and a personalization update via user feedback.
 
 \subsection{Candidate Generation}
-For any given user $u$, the candidate set $C(u)$ consists of all items that the user has not interacted with in the training split. This ensures that the system only recommends unseen movies to the user.
+
+\noindent For any given user $u$, the candidate set $C(u)$ consists of all items that the user has not interacted with in the training split, to make sure our evaluation reflects the system's ability to recommend \textit{unseen} content.
 
 \subsection{Rankers}
-We implemented four distinct ranking methods to encode personal relevance:
+
+\noindent We implemented four distinct ranking methods to encode personal relevance:
 \begin{itemize}
     \item \textbf{Popularity Baseline:} A non-personalized ranker that orders candidate movies based on their global interaction count in the training dataset.
-    \item \textbf{MF-SGD:} A Matrix Factorization model with biases predicting ratings as $\hat{r}_{ui} = \mu + b_u + b_i + p_u^\top q_i$, trained using Stochastic Gradient Descent.
-    \item \textbf{MF-ALS:} A Matrix Factorization model with biases trained using Alternating Least Squares, which relies on closed-form ridge regression updates.
-    \item \textbf{Pairwise LTR:} A logistic pairwise preference model leveraging gradient descent. The ranking score is computed as $s_\phi(u,i) = \phi^\top f(u,i)$. The feature vector $f(u,i)$ includes the base MF score, user bias, item bias, the log-normalized popularity of the item, and a constant bias term.
+    \item \textbf{MF-SGD:} A Matrix Factorization model with biases predicting ratings as $\hat{r}_{ui} = \mu + b_u + b_i + p_u^\top q_i$, trained using Stochastic Gradient Descent with separate regularization coefficients for latent factors and biases (see Section~\ref{sec:hyperparams}).
+    \item \textbf{MF-ALS:} A Matrix Factorization model with biases trained using Alternating Least Squares, which relies on closed-form ridge regression updates derived in Appendix~\ref{app:theory}.
+    \item \textbf{Pairwise LTR:} A logistic pairwise preference model trained via gradient descent. The ranking score is $s_\phi(u,i) = \phi^\top f(u,i)$, where the feature vector is $f(u,i) = [s_{\text{MF}}(u,i),\; b_u,\; b_i,$ $\text{pop}(i),\; 1]$, combining the MF score, user and item biases, log-normalized popularity, and a constant intercept term. Preference pairs $(u, i^+, i^-)$ are constructed from training ratings with $r_{ui^+} \ge 4$ and $r_{ui^-} \le 2$, capped at 50 pairs per user.
 \end{itemize}
 
-\subsection{Hyperparameter Tuning}
-While standard baseline parameters (e.g., $d=20$, $\lambda=0.05$) were initially considered, we utilized the \texttt{Optuna} framework to rigorously optimize our Matrix Factorization models against our dedicated validation set. 
+\subsubsection{Hyperparameter Tuning}
+\label{sec:hyperparams}
 
-Rather than relying on manual guesses, we ran automated study trials to minimize the validation Root Mean Square Error (RMSE). For example, the optimization for the MF-SGD model yielded an ideal latent dimension of $d=81$, factor regularization $\lambda_{factors} \approx 0.1138$, bias regularization $\lambda_{biases} \approx 0.0005$, a learning rate $\eta \approx 0.0116$, and $75$ training epochs. These mathematically tuned parameters were subsequently locked in and used for all final offline evaluations and co-creative simulations.
+\noindent Rather than relying on manually chosen baseline parameters, we employed the \texttt{Optuna} framework to automatically optimize both MF models against the dedicated validation set by minimizing RMSE. This produced the following tuned configurations:
+
+\begin{itemize}
+    \item \textbf{MF-SGD:} latent dimension $d = 81$, factor regularization $\lambda_{\text{factors}} \approx 0.1138$, bias regularization $\lambda_{\text{biases}} \approx 0.0005$, learning rate $\eta \approx 0.0116$, trained for 75 epochs (best checkpoint at epoch 56).
+    \item \textbf{MF-ALS:} latent dimension $d = 131$, regularization $\lambda \approx 9.716$, 15 iterations (best checkpoint at iteration 5).
+\end{itemize}
+
+\noindent A key deviation from the standard practice lab implementation is that our SGD training uses \textbf{two separate regularization coefficients} instead of one. The standard formulation applies a single $\lambda$ uniformly to all parameters:
+$$l_{ui} = (r_{ui} - \hat{r}_{ui})^2 + \lambda\bigl(\|p_u\|^2 + \|q_i\|^2 + b_u^2 + b_i^2\bigr)$$
+\noindent Our implementation decouples this into $\lambda_{\text{factors}}$ for the latent vectors and $\lambda_{\text{biases}}$ for the scalar bias terms:
+$$l_{ui} = (r_{ui} - \hat{r}_{ui})^2 + \lambda_{\text{factors}}\bigl(\|p_u\|^2 + \|q_i\|^2\bigr) + \lambda_{\text{biases}}\bigl(b_u^2 + b_i^2\bigr)$$
+\noindent This is motivated by the observation that bias terms are low-complexity scalar parameters that require much lighter regularization than the high-dimensional factor vectors. The Optuna study confirmed this: the optimal $\lambda_{\text{biases}} \approx 0.0005$ was more than two orders of magnitude smaller than $\lambda_{\text{factors}} \approx 0.1138$, validating the two-parameter design.
 
 \subsection{Reranking (Diversity Constraints)}
-To control list-level diversity, we applied Maximal Marginal Relevance (MMR) over the top 80 candidates produced by the base ranker. The reranker dynamically builds the slate step-by-step by selecting the item $c^*$ that maximizes:
-$$c^* = \arg\max_{c \in C \setminus S} \left( (1 - \alpha)\text{sim}(c, q) - \alpha \max_{s \in S}\text{sim}(c, s) \right)$$
-Our pipeline computes item similarity via the cosine similarity of the $L_2$-normalized genre vectors extracted from the dataset's item metadata. We explored the trade-off parameter $\alpha \in \{0.1, 0.4, 0.7\}$ to observe the impact on relevance and diversity metrics.
+
+\noindent To control list-level diversity, we applied Maximal Marginal Relevance (MMR) over the top $M = 80$ candidates produced by the base ranker. The reranker dynamically builds the slate step-by-step by selecting the item $c^*$ that maximizes:
+$$c^* = \arg\max_{c \in C \setminus S} \left( (1 - \alpha)\,\text{rel}(c) - \alpha \max_{s \in S}\text{sim}(c, s) \right)$$
+\noindent where $\text{rel}(c)$ is the normalized relevance score of candidate $c$ and $\text{sim}(c, s)$ is the cosine similarity between the $L_2$-normalized genre vectors of items $c$ and $s$, extracted from the genre one-hot encoding (19 dimensions) in the dataset's item metadata. We explored the trade-off parameter $\alpha \in \{0.1, 0.4, 0.7\}$ to observe the impact on relevance and diversity metrics.
+
 \subsection{Personalization Update (Session)}
-To simulate a co-creative loop, the system executes multi-turn sessions where a user is presented with a slate, makes a choice, and has their latent state updated. We simulate the choice by selecting an item from the slate that the user actually rated in the test set. The personalization update applies an Exponential Moving Average (EMA) to the user's latent representation. If user $u$ selects item $i^*$, their factor vector $p_u$ is updated dynamically using the learned item factor $q_{i^*}$ with a rate $\beta = 0.1$:
-$$p_u \leftarrow (1 - \beta)p_u + \beta q_{i^*}$$
-In our demonstration, we simulated 5 consecutive feedback rounds per user for 3 distinct users to observe how the recommended slate evolves and adapts to recent choices.
+
+\noindent To simulate a co-creative loop, the system executes multi-turn sessions where a user is presented with a ranked slate, makes a choice, and has their latent state updated. The simulated feedback heuristic selects whichever item in the top-10 has the highest known test rating, falling back to a random pick if no test ratings are present. The personalization update applies an Exponential Moving Average (EMA) to the user's latent representation. If user $u$ selects item $i^*$, their factor vector $p_u$ is updated as:
+$$p_u \leftarrow (1 - \beta)\,p_u + \beta\, q_{i^*}$$
+\noindent with $\beta = 0.1$. We simulated 5 consecutive feedback rounds for 3 distinct users to observe how the recommended slate evolves and adapts to recent choices.
+
+\noindent The three users were selected by a principled, reproducible criterion: we ranked all eligible users (those with at least 2 relevant test items) by their number of relevant test items and selected one \textit{active} user (most relevant items), one \textit{median} user (median relevant items), and one \textit{marginal} user (fewest relevant items while meeting the minimum threshold). This spread allows us to observe session dynamics across different levels of test-set signal.
 
 \section{Experiments and Results}
 \label{sec:experiments}
 
-\subsection{E1: Baseline Comparison}
+\subsection{Baseline Comparison}
 \label{sec:e1}
 
+\noindent Table~\ref{tab:e1} reports Recall@10 and NDCG@10 averaged over 300 eligible users (those with $|G_u| > 0$), evaluated across all four rankers. Figure~\ref{fig:e1} visualises the same results as a grouped bar chart.
 
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\textwidth]{baseline_comparison.png}
+    \caption{Grouped bar chart of Recall@10 and NDCG@10 for the four rankers.}
+    \label{fig:e1}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{Offline ranking metrics for the four rankers ($K=10$, 300 users).}
+\label{tab:e1}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Ranker}  & \textbf{Recall@10} & \textbf{NDCG@10} \\
+\midrule
+Popularity       & 0.0917             & 0.1768           \\
+MF-SGD           & 0.0453             & 0.0799           \\
+MF-ALS           & 0.0816             & 0.1725           \\
+Pairwise LTR     & 0.0457             & 0.0823           \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent The most striking result is that the non-personalized Popularity ranker achieves the highest scores on both metrics (Recall@10 = 0.0917, NDCG@10 = 0.1768) with MF-ALS close behind (0.0816, 0.1725), while MF-SGD and Pairwise LTR score substantially lower. This apparent paradox is a concrete manifestation of the offline evaluation caveat discussed in Appendix~\ref{app:theory} (T5): the 80/20 random split produces a test set heavily skewed towards popular films, since widely-rated movies appear in many users' held-out sets. A ranker that systematically recommends the most-interacted items therefore achieves disproportionately high offline coverage.
+
+\noindent A second notable finding is the inversion between RMSE and ranking quality for the two MF variants. MF-SGD achieves a lower validation RMSE (0.9246 vs.\ 0.9296 for MF-ALS), yet it ranks a full 0.0926 NDCG points below MF-ALS. This is a direct empirical demonstration of T4: a pointwise rating-prediction objective does not optimise item ordering. The SGD model's aggressive factor regularisation ($\lambda_{\text{factors}} \approx 0.114$) suppresses the magnitude of latent factor vectors and, consequently, the discriminative power of the inner-product score, whereas ALS, with its closed-form updates and strong ridge penalty ($\lambda = 9.716$), produces factor vectors that better preserve the global ordering of item appeal.
+
+\noindent The Pairwise LTR model improves marginally over MF-SGD (NDCG: 0.0823 vs.\ 0.0799) despite using MF-SGD scores as its primary feature. Inspecting the learned weight vector reveals the mechanism: $\phi = [1.333,\; 0.000,\; 0.401,\; 0.046,\; 0.000]$. The user bias $b_u$ and the intercept are driven to zero by the regulariser, which is mathematically expected: for a fixed user, $b_u$ shifts all item scores by the same constant and thus has no effect on pairwise ordering. The item bias $b_i$ ($\phi_2 = 0.401$) captures average item quality, and the log-popularity term ($\phi_3 = 0.046$) provides a small additional boost, together producing the marginal gain over the raw MF score.
+
+\subsection{MMR Relevance/Diversity Tradeoff}
+\label{sec:e2}
+
+\noindent Table~\ref{tab:e2} and Figure~\ref{fig:e2} show the effect of the MMR trade-off parameter $\alpha$ on NDCG@10 and Diversity@10 when applied over the top-$M = 80$ candidates of the MF-SGD ranker. Diversity@10 is the average pairwise cosine distance between the $L_2$-normalised genre vectors of the 10 recommended items, evaluated over 200 users.
+
+\begin{table}[H]
+\centering
+\caption{MMR Relevance/Diversity Tradeoff: NDCG@10 and Diversity@10 across the full $\alpha$ range (MF-SGD base ranker, $K=10$, 200 users).}
+\label{tab:e2}
+\begin{tabular}{ccc}
+\toprule
+$\alpha$             & \textbf{NDCG@10} & \textbf{Diversity@10} \\
+\midrule
+0.0 (no MMR)         & 0.0817           & 0.7370                \\
+0.1                  & 0.0804           & 0.7964                \\
+0.4                  & 0.0688           & 0.9312                \\
+0.7                  & 0.0667           & 0.9615                \\
+1.0 (pure diversity) & 0.0667           & 0.9695                \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.65\textwidth]{relevance_diversity_tradeoff.png}
+    \caption{MMR Relevance/Diversity Tradeoff: NDCG@10 vs.\ Diversity@10 tradeoff curve across $\alpha \in \{0, 0.1, 0.4, 0.7, 1\}$.}
+    \label{fig:e2}
+\end{figure}
+
+\noindent The full tradeoff curve in spans from pure relevance to pure diversity, and is monotone throughout: every increase in $\alpha$ raises genre diversity while reducing or holding NDCG@10.
+
+\noindent At the two extremes, $\alpha = 0$ corresponds to taking the top-$K$ items directly from the MF-SGD ranking with no reranking (NDCG = 0.0817, Diversity = 0.7370), while $\alpha = 1$ ignores relevance entirely and selects greedily for genre dissimilarity (NDCG = 0.0667, Diversity = 0.9695). Notably, NDCG at $\alpha = 1$ is identical to that at $\alpha = 0.7$ to four decimal places, indicating that beyond $\alpha = 0.7$ the candidate pool has been sufficiently diversified and any further increase in the diversity weight displaces equally relevant items without gaining meaningful additional genre coverage.
+
+\noindent The gains along the curve are strongly non-uniform. The step from $\alpha = 0$ to $\alpha = 0.1$ delivers a diversity gain of $+0.059$ at a negligible NDCG cost of only $-0.0013$ --- a near-free improvement, as the first diversifying swaps replace genre near-duplicates sitting just below the top-ranked items. The largest single diversity jump occurs between $\alpha = 0.1$ and $\alpha = 0.4$ ($+0.135$ diversity, $-0.0116$ NDCG), where the reranker begins displacing genuinely relevant but genre-redundant items. The transition from $\alpha = 0.4$ to $\alpha = 0.7$ yields sharply diminishing returns ($+0.030$ diversity, $-0.0021$ NDCG), and the final step to $\alpha = 1$ adds only $+0.008$ diversity with no additional NDCG cost. This concave shape reflects the structure of the candidate pool: genre diversity is cheapest to gain early, when near-duplicates are available, and increasingly expensive as the remaining candidates become more heterogeneous. For the interactive sessions, $\alpha = 0.4$ was chosen as the default, capturing most of the available diversity gain ($+0.194$ over $\alpha = 0$) at a moderate and well-understood relevance cost.
+
+\subsection{Ablation Study}
+\label{sec:e3}
+
+\noindent Two targeted ablations isolate the contribution of MMR reranking and the popularity feature in LTR.
+
+\paragraph{Ablation A: Effect of MMR reranking.}
+
+\noindent Table~\ref{tab:abl-a} compares the Pairwise LTR ranker with and without the MMR step ($\alpha = 0.4$, $K = 10$).
+
+\begin{table}[H]
+\centering
+\caption{Ablation A: Effect of MMR reranking on Pairwise LTR ($\alpha = 0.4$, $K=10$).}
+\label{tab:abl-a}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Configuration}      & \textbf{NDCG@10} & \textbf{Recall@10} & \textbf{Diversity@10} \\
+\midrule
+LTR (no MMR)                & 0.0823           & 0.0457             & 0.7539                \\
+LTR + MMR ($\alpha = 0.4$)  & 0.0682           & 0.0375             & 0.9359                \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent Disabling MMR recovers 0.0141 NDCG and 0.0082 Recall but drops Diversity from 0.9359 to 0.7539, a loss of 0.1820 points. Without MMR, the LTR scorer tends to surface items from the same high-scoring genres (primarily Drama and Thriller), producing a slate that is internally redundant. MMR resolves this by explicitly penalising genre similarity to already-selected items, forcing the reranker to traverse a wider portion of the genre space at each step. The cost in ranking quality is real but bounded: NDCG falls by 17\% while diversity improves by 24\%, a tradeoff that is acceptable whenever list-level diversity is a system objective.
+
+\paragraph{Ablation B: Effect of the popularity feature.}
+
+\noindent Table~\ref{tab:abl-b} compares two LTR variants: the full 5-feature model $f = [s_\text{MF},\, b_u,\, b_i,\, \text{pop},\, 1]$ and a retrained 4-feature model with popularity removed, $f = [s_\text{MF},\, b_u,\, b_i,\, 1]$.
+
+\begin{table}[H]
+\centering
+\caption{Ablation B: Effect of removing the popularity feature from Pairwise LTR ($K=10$).}
+\label{tab:abl-b}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Configuration}         & \textbf{NDCG@10} & \textbf{Recall@10} \\
+\midrule
+LTR (full, 5 features)         & 0.0823           & 0.0457             \\
+LTR (no pop, 4 features)       & 0.0785           & 0.0441             \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent Removing popularity reduces NDCG by 0.0038 (4.6\%) and Recall by 0.0016 (3.5\%). The no-pop weight vector $\phi_{\text{no-pop}} = [1.334,\; 0.000,\; 0.403,\; 0.000]$ is nearly identical to the full model on the shared features, confirming that the remaining features partially compensate but cannot fully substitute for the popularity signal. The drop, while modest, is consistent: popularity acts as a soft correction for exposure bias in the training set. Items that have accumulated many ratings are inherently more likely to appear in test sets drawn from the same distribution, so the ranker that acknowledges this signal recovers a small but reliable offline improvement.
+
+\subsection{Interactive Sessions}
+\label{sec:sessions}
+
+\noindent Table~\ref{tab:sessions} reports NDCG@10 per turn for the three sessions, each running 5 rounds with LTR + MMR ($\alpha = 0.4$) and EMA updates ($\beta = 0.1$). Figure~\ref{fig:sessions} plots the same data as a line chart. The three users were selected by a principled criterion: one active user (u=449, 95 relevant test items), one median user (u=387, 8 relevant test items), and one marginal user (u=432, 2 relevant test items), spanning the full range of test-set density.
+
+\begin{table}[H]
+\centering
+\caption{NDCG@10 per turn across the three user sessions (LTR + MMR, $\alpha=0.4$, $\beta=0.1$, $K=10$).}
+\label{tab:sessions}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Session (user id)} & \textbf{Turn 1} & \textbf{Turn 2} & \textbf{Turn 3} & \textbf{Turn 4} & \textbf{Turn 5} \\
+\midrule
+Active (u=449, 95 items)   & 0.2588          & 0.2985          & 0.1428          & 0.1396          & 0.2934          \\
+Median (u=387, 8 items)    & 0.0000          & 0.0761          & 0.0000          & 0.0000          & 0.0000          \\
+Marginal (u=432, 2 items)  & 0.1934          & 0.0000          & 0.0000          & 0.0000          & 0.0000          \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.72\textwidth]{session_ndcg10_per_turn.png}
+    \caption{NDCG@10 per turn for the three user sessions ($\alpha=0.4$, $\beta=0.1$).}
+    \label{fig:sessions}
+\end{figure}
+
+\noindent The three sessions exhibit qualitatively different dynamics, each informative in its own way (its logs are present in the delivery).
+
+\noindent The \textbf{active user} achieves consistently high but non-linear NDCG across turns (0.259 $\to$ 0.299 $\to$ 0.143 $\to$ 0.140 $\to$ 0.293), which reflects two competing forces. On one hand, the EMA update ($\beta = 0.1$) progressively shifts the user embedding toward the latent space of chosen films; on the other, items shown in earlier turns are excluded from later candidate pools, narrowing the field. After three consecutive picks of critically acclaimed dramas and thrillers (Rear Window, Schindler's List, Psycho), the user embedding drifts towards that genre cluster and the candidate diversity drops (Diversity@10 falls to 0.709 in turn 4). Turn 5 recovers strongly (NDCG = 0.293) as the model rediscovers relevant items in adjacent parts of the embedding space. All five picks received a 5/5 test rating, confirming that the feedback heuristic surfaces genuinely preferred content.
+
+\noindent The \textbf{median user} registers NDCG = 0 in four of five turns because the heuristic picks items not present in their test set (Casablanca, Wings of Desire, Henry V, As Good As It Gets). Only turn 2 yields a positive signal, when Titanic is recommended and rated 5/5 (NDCG = 0.0761, Recall = 0.1250, one of eight relevant items). This pattern illustrates a structural limitation of offline evaluation: the feedback heuristic can only confirm quality when the chosen item happens to appear in the held-out test ratings. Picks that are genuinely aligned with the user's taste but were not rated in the observed data register as failures.
+
+\noindent The \textbf{marginal user} immediately surfaces \textit{The Usual Suspects}, which the user rated 5/5 (NDCG = 0.1934, Recall = 0.5000, capturing one of only two relevant test items). Subsequent turns pick a stylistically coherent sequence of pre-1960 classics (The Third Man, The African Queen, My Man Godfrey, Arsenic and Old Lace), tracing a trajectory consistent with the noir/classic genre signal embedded in the first pick via the EMA update. However, with both relevant test items exhausted, offline NDCG cannot confirm the quality of these later recommendations, even though they reflect meaningful personalization.
 
 \section{Conclusion}
 \label{sec:conclusion}
 
-[Summarize the main findings of your project. What did you learn about the tradeoffs between relevance and diversity? Which ranking method performed best? Reflect on the challenges of offline evaluation and the importance of co-creative systems.]
+\noindent The results of this project yield a few takeaways. First, regarding ranker quality, Popularity and MF-ALS dominate offline metrics (NDCG@10 of 0.1768 and 0.1725 respectively), while MF-SGD and Pairwise LTR trail significantly (0.0799 and 0.0823). This is primarily an artefact of offline evaluation bias rather than a failure of the personalized models: popular items are over-represented in held-out test sets drawn from the same distribution as training data, systematically rewarding rankers that promote them. The inversion of MF-SGD and MF-ALS relative to their RMSE ordering (0.9246 vs.\ 0.9296) is a concrete illustration of why rating-prediction accuracy is a poor predictor of ranking quality. The Pairwise LTR model provides a marginal but consistent gain over MF-SGD by incorporating item bias and popularity as complementary features, and its learned weight vector reveals that user bias is correctly zeroed out for pairwise ranking.
+
+\noindent Second, regarding the relevance--diversity tradeoff, MMR reranking with genre-vector similarity produces a clear, controllable tradeoff. The diversity gain at $\alpha = 0.1$ is nearly cost-free ($-0.0013$ NDCG, $+0.059$ Diversity), while $\alpha = 0.4$ offers a substantial diversity improvement ($+0.194$) at a 17\% NDCG cost. For a co-creative system, concentrated slates accelerate filter-bubble formation, whereas diverse slates expose users to content they would not have self-selected, supporting discovery.
+
+\noindent Third, regarding personalization dynamics, the EMA update shows that even a lightweight state-update rule produces qualitatively meaningful session trajectories. The active user's embedding drifts coherently toward their chosen genre cluster, and the recovery in turn 5 shows the model can escape temporary local concentration. The marginal user session further illustrates that meaningful personalization can occur even when offline metrics are silent, as the subsequent picks form a stylistically consistent sequence that reflects the embedding shift induced by the first choice.
+
+\noindent A persistent limitation across all experiments is the offline evaluation framework itself: test ratings capture only items that users were historically exposed to, conflating exposure with preference. Future work could include debiasing via inverse propensity scoring, and replacing simulated feedback with real user interaction data to validate the session dynamics observed here under controlled conditions.
 
 \begin{appendices}
 \section{Theory Questions}
@@ -152,7 +320,7 @@ In our demonstration, we simulated 5 consecutive feedback rounds per user for 3 
 
 \subsection*{1. Stochastic Gradient Descent (SGD)}
 
-We consider the biased matrix factorization model
+\noindent We consider the biased matrix factorization model
 
 \begin{align*}
     \mathcal{E}_{ui} &= R_{ui} - \hat{R}_{ui}
@@ -164,21 +332,21 @@ We consider the biased matrix factorization model
     \quad \text{(regularized squared loss)}
 \end{align*}
 
-The SGD update rule for each parameter $\theta$ is
+\noindent The SGD update rule for each parameter $\theta$ is
 
 \begin{align*}
     \theta \leftarrow \theta - \eta \nabla_{\theta}l_{ui},
 \end{align*}
 
-where $\eta$ denotes the learning rate.
+\noindent where $\eta$ denotes the learning rate.
 
-Using the chain rule,
+\noindent Using the chain rule,
 
 \begin{align*}
     \frac{\partial}{\partial\theta}(R_{ui} - \hat{R}_{ui})^2
     &= 2(R_{ui} - \hat{R}_{ui})
     \cdot
-    \frac{\partial}{\partial\theta}(R_{ui} - \hat{R}_{ui}) \
+    \frac{\partial}{\partial\theta}(R_{ui} - \hat{R}_{ui}) \\
     &= -2 \mathcal{E}_{ui}
     \cdot
     \frac{\partial\hat{R}_{ui}}{\partial\theta}.
@@ -186,14 +354,14 @@ Using the chain rule,
 
 \paragraph{Gradient with respect to $p_u$}
 
-Only the inner-product term depends on $p_u$, therefore
+\noindent Only the inner-product term depends on $p_u$, therefore
 
 \begin{align*}
     \nabla_{p_u} l_{ui}
     &= -2\mathcal{E}_{ui} q_i + 2\lambda p_u.
 \end{align*}
 
-Thus the SGD update becomes
+\noindent Thus the SGD update becomes
 
 \begin{align*}
     p_u \leftarrow p_u + \eta(\mathcal{E}_{ui} q_i - \lambda p_u).
@@ -201,14 +369,14 @@ Thus the SGD update becomes
 
 \paragraph{Gradient with respect to $q_i$}
 
-Similarly,
+\noindent Similarly,
 
 \begin{align*}
     \nabla_{q_i} l_{ui}
     &= -2\mathcal{E}_{ui} p_u + 2\lambda q_i,
 \end{align*}
 
-leading to
+\noindent leading to
 
 \begin{align*}
     q_i \leftarrow q_i + \eta(\mathcal{E}_{ui} p_u - \lambda q_i).
@@ -216,14 +384,14 @@ leading to
 
 \paragraph{Gradient with respect to $b_u$}
 
-Since the prediction depends linearly on $b_u$,
+\noindent Since the prediction depends linearly on $b_u$,
 
 \begin{align*}
     \nabla_{b_u} l_{ui}
     &= -2\mathcal{E}_{ui} + 2\lambda b_u,
 \end{align*}
 
-and therefore
+\noindent and therefore
 
 \begin{align*}
     b_u \leftarrow b_u + \eta(\mathcal{E}_{ui} - \lambda b_u).
@@ -231,32 +399,32 @@ and therefore
 
 \paragraph{Gradient with respect to $b_i$}
 
-Analogously,
+\noindent Analogously,
 
 \begin{align*}
     \nabla_{b_i} l_{ui}
     &= -2\mathcal{E}_{ui} + 2\lambda b_i,
 \end{align*}
 
-so that
+\noindent so that
 
 \begin{align*}
     b_i \leftarrow b_i + \eta(\mathcal{E}_{ui} - \lambda b_i).
 \end{align*}
 
-These updates define the SGD optimization procedure applied independently to each observed rating pair $(u,i)$.
+\noindent These updates define the SGD optimization procedure applied independently to each observed rating pair $(u,i)$.
 
 \vspace{1cm}
 
 \subsection*{2. Alternating Least Squares (ALS)}
 
-Assume $Q$, $b_u$, $b_i$, and $\mu$ are fixed. Define the bias-corrected residual
+\noindent Assume $Q$, $b_u$, $b_i$, and $\mu$ are fixed. Define the bias-corrected residual
 
 \begin{align*}
     e_{ui} = R_{ui} - (\mu + b_u + b_i).
 \end{align*}
 
-Then optimizing over $p_u$ reduces to
+\noindent Then optimizing over $p_u$ reduces to
 
 \begin{align*}
     L(p_u)
@@ -267,9 +435,9 @@ Then optimizing over $p_u$ reduces to
     \lambda ||p_u||^2,
 \end{align*}
 
-which corresponds to a ridge regression problem with predictors $q_i$ and targets $e_{ui}$.
+\noindent which corresponds to a ridge regression problem with predictors $q_i$ and targets $e_{ui}$.
 
-Taking the gradient with respect to $p_u$,
+\noindent Taking the gradient with respect to $p_u$,
 
 \begin{align*}
     \nabla_{p_u} L(p_u)
@@ -280,7 +448,7 @@ Taking the gradient with respect to $p_u$,
     2\lambda p_u.
 \end{align*}
 
-Setting the gradient equal to zero yields the normal equations
+\noindent Setting the gradient equal to zero yields the normal equations
 
 \begin{align*}
     \sum_{i \in \Omega(u)}
@@ -288,7 +456,7 @@ Setting the gradient equal to zero yields the normal equations
     + \lambda p_u = 0.
 \end{align*}
 
-Expanding terms,
+\noindent Expanding terms,
 
 \begin{align*}
     \sum_{i \in \Omega(u)}
@@ -300,7 +468,7 @@ Expanding terms,
     \lambda p_u.
 \end{align*}
 
-Factoring $p_u$,
+\noindent Factoring $p_u$,
 
 \begin{align*}
     \sum_{i \in \Omega(u)}
@@ -315,7 +483,7 @@ Factoring $p_u$,
     p_u.
 \end{align*}
 
-Multiplying both sides by the inverse matrix gives the closed-form solution
+\noindent Multiplying both sides by the inverse matrix gives the closed-form solution
 
 \begin{align*}
     p_u
@@ -332,44 +500,44 @@ Multiplying both sides by the inverse matrix gives the closed-form solution
     \right).
 \end{align*}
 
-This expression corresponds to the ALS update step for user latent factors under $\ell_2$ regularization.
+\noindent This expression corresponds to the ALS update step for user latent factors under $\ell_2$ regularization.
 
 \vspace{1cm}
 
 \subsection*{3. Pairwise gradient}
 
-Let
+\noindent Let
 
 \begin{align*}
     s_\phi(u,i) &= \phi^T f(u,i), \\
     \Delta f &= f(u,i^+) - f(u,i^-).
 \end{align*}
 
-We want to compute
+\noindent We want to compute
 
 \begin{align*}
     \nabla_\phi \left(-\log \sigma(\phi^T \Delta f)\right).
 \end{align*}
 
-Define
+\noindent Define
 
 \begin{align*}
     z = \phi^T \Delta f.
 \end{align*}
 
-Since
+\noindent Since
 
 \begin{align*}
     \sigma(z) = \frac{1}{1+e^{-z}},
 \end{align*}
 
-its derivative is
+\noindent its derivative is
 
 \begin{align*}
     \sigma'(z) = \sigma(z)(1-\sigma(z)).
 \end{align*}
 
-Therefore,
+\noindent Therefore,
 
 \begin{align*}
     \frac{d}{dz}\left(-\log\sigma(z)\right)
@@ -381,13 +549,13 @@ Therefore,
     \sigma(z)-1.
 \end{align*}
 
-Using the chain rule,
+\noindent Using the chain rule,
 
 \begin{align*}
     \nabla_\phi z = \nabla_\phi (\phi^T \Delta f) = \Delta f.
 \end{align*}
 
-Thus,
+\noindent Thus,
 
 \begin{align*}
     \nabla_\phi \left(-\log\sigma(\phi^T \Delta f)\right)
@@ -400,7 +568,7 @@ Thus,
 
 \subsection*{4. Why RMSE $\neq$ ranking quality?}
 
-Optimizing RMSE in matrix factorization minimizes prediction error over rating values:
+\noindent Optimizing RMSE in matrix factorization minimizes prediction error over rating values:
 
 \begin{align*}
 \text{RMSE}
@@ -412,9 +580,9 @@ Optimizing RMSE in matrix factorization minimizes prediction error over rating v
     }.
 \end{align*}
 
-However, top-$K$ recommendation quality depends primarily on the correctness of the ordering of predicted scores rather than their absolute values.
+\noindent However, top-$K$ recommendation quality depends primarily on the correctness of the ordering of predicted scores rather than their absolute values.
 
-There are several reasons for this mismatch:
+\noindent There are several reasons for this mismatch:
 
 \begin{itemize}
 
@@ -424,35 +592,28 @@ There are several reasons for this mismatch:
 
 \item The absence of a rating is typically related to its value. Users rate only items they are exposed to, introducing exposure bias into the dataset.
 
-\item It does not enforce pairwise ordering constraints such as
-
-\begin{align*}
-\hat{R}_{ui^+} > \hat{R}_{ui^-},
-\end{align*}
-
-which is essential for ranking-based recommendation tasks.
+\item It does not enforce pairwise ordering constraints such as $\hat{R}_{ui^+} > \hat{R}_{ui^-}$, which is essential for ranking-based recommendation tasks.
 
 \end{itemize}
-\begin{align*}
-\text{Thus, in general, low RMSE does not necessarily imply good top-}K\text{ recommendation quality.}
-\end{align*}
+
+\noindent Thus, in general, low RMSE does not necessarily imply good top-$K$ recommendation quality.
 
 
 \vspace{1cm}
 
 \subsection*{5. Offline evaluation caveat}
 
-Offline evaluation assumes that observed interactions reflect true user preferences. However, this assumption fails when exposure is not random.
+\noindent Offline evaluation assumes that observed interactions reflect true user preferences. However, this assumption fails when exposure is not random.
 
-We can define interaction as,
+\noindent We can define interaction as
 
 \begin{align*}
 \text{interaction} = \text{exposure} + \text{preference}.
 \end{align*}
 
-Users can only interact with items they are exposed to. Therefore, interaction data reflects both user preferences and historical exposure policies.
+\noindent Users can only interact with items they are exposed to. Therefore, interaction data reflects both user preferences and historical exposure policies.
 
-As a consequence:
+\noindent As a consequence:
 
 \begin{itemize}
 
@@ -464,9 +625,8 @@ As a consequence:
 
 \end{itemize}
 
-Thus, offline evaluation can produce misleading estimates of recommendation quality unless exposure is randomized or corrected using debiasing techniques, such as inverse propensity scoring, in which data is reweighted to account for the probability of exposure.
+\noindent Thus, offline evaluation can produce misleading estimates of recommendation quality unless exposure is randomized or corrected using debiasing techniques, such as inverse propensity scoring, in which data is reweighted to account for the probability of exposure.
 
 \end{appendices}
 
 \end{document}
-

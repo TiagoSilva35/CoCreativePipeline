@@ -15,7 +15,7 @@
 \usepackage{subcaption}
 \usepackage{enumitem}
 \usepackage{appendix}
-
+\usepackage{biblatex}
 \graphicspath{{images/}}
 
 % Define colors for code listings
@@ -60,6 +60,8 @@ Miguel Martins\thanks{\texttt{}}
 
 \date{\today}
 
+\addbibresource{report.bib}
+
 \begin{document}
 
 \maketitle
@@ -90,7 +92,7 @@ Miguel Martins\thanks{\texttt{}}
 \section{Dataset and Preprocessing}
 \label{sec:dataset}
 
-\noindent For this project, we utilized the \textbf{MovieLens 100K} dataset, a standard benchmark in recommender systems research that contains 100,000 ratings (ranging from 1 to 5) applied to 1,682 movies by 943 users.
+\noindent For this project, we utilized the \textbf{MovieLens 100K} dataset, a standard benchmark in recommender systems research that contains 100,000 ratings (ranging from 1 to 5) applied to 1,682 movies by 943 users. After researching the dataset, we found that typical matrix factorization methods such as ALS and SGD are able to reach up to a 0.92 RMSE value. Also, we found that new methods involving neural matrix factorization or even autoencoders can reach, at most, 0.83. The latter methods involve treating recommendation as a "denoising" task, which handles the sparsity of this dataset quite effectively~\cite{DBLP:journals/corr/abs-1901-00415}. The apparently "high" value for RMSE is related to the inherent "entropy" of human rating where the same user might rate the same movie differently on a different day.
 
 \noindent To prepare the data for our models, we performed the following preprocessing steps:
 \begin{enumerate}
@@ -124,11 +126,11 @@ Miguel Martins\thanks{\texttt{}}
 \subsubsection{Hyperparameter Tuning}
 \label{sec:hyperparams}
 
-\noindent Rather than relying on manually chosen baseline parameters, we employed the \texttt{Optuna} framework to automatically optimize both MF models against the dedicated validation set by minimizing RMSE. This produced the following tuned configurations:
+\noindent Rather than relying on manually chosen baseline parameters, we employed the \texttt{Optuna} framework to automatically optimize both MF models (using the tree-structured parzen estimator, TPE, sampler) against the dedicated validation set by minimizing RMSE which is a bayesian optimization method that adaptatively explores the search space by modeling promising and non-promising parameter regions. This produced the following tuned configurations:
 
 \begin{itemize}
     \item \textbf{MF-SGD:} latent dimension $d = 81$, factor regularization $\lambda_{\text{factors}} \approx 0.1138$, bias regularization $\lambda_{\text{biases}} \approx 0.0005$, learning rate $\eta \approx 0.0116$, trained for 75 epochs (best checkpoint at epoch 56).
-    \item \textbf{MF-ALS:} latent dimension $d = 131$, regularization $\lambda \approx 9.716$, 15 iterations (best checkpoint at iteration 5).
+    \item \textbf{MF-ALS:} latent dimension $d = 131$, regularization $\lambda \approx 9.716$, 15 iterations (best checkpoint at iteration 5). The low number of iterations is explained with the fact that alternating least squares already yield an optimal conditional solution, does not depend on a learning rate and are extremely stable for small datasets. 
 \end{itemize}
 
 \noindent A key deviation from the standard practice lab implementation is that our SGD training uses \textbf{two separate regularization coefficients} instead of one. The standard formulation applies a single $\lambda$ uniformly to all parameters:
@@ -628,5 +630,6 @@ Marginal (u=432, 2 items)  & 0.1934          & 0.0000          & 0.0000         
 \noindent Thus, offline evaluation can produce misleading estimates of recommendation quality unless exposure is randomized or corrected using debiasing techniques, such as inverse propensity scoring, in which data is reweighted to account for the probability of exposure.
 
 \end{appendices}
+\printbibliography
 
 \end{document}
